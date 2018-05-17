@@ -257,7 +257,6 @@ class InMemoryStorage(object):
 
     def dump_cache_into_json_file__with_ts(self):
         current_directory = os.path.dirname(os.path.abspath(__file__))
-        self.cache = {"test": "test"}
         ts = datetime.utcnow()
         full_directory_path = "".join([
             current_directory,
