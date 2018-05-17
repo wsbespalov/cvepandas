@@ -29,7 +29,7 @@ SETTINGS = {
         "d2sec": "http://www.d2sec.com/exploits/elliot.xml",
         "npm": "https://api.nodesecurity.io/advisories",
     },
-    "start_year": 2018,
+    "start_year": 2002,
     "memcached": {
         "key_prefix": "index",
         "separator": "::",
@@ -281,12 +281,12 @@ class InMemoryStorage(object):
         try:
             with open(full_path, "w") as objfile:
                 json.dump(self.cache, objfile, ensure_ascii=False)
-                return True
+                return full_path
         except Exception as ex:
             print("Get an exception when make cache dump: {}".format(
                 ex
             ))
-        return False
+        return None
 
     def restore_from_dump__with_full_path(self, full_path):
         if os.path.exists(full_path):
@@ -392,6 +392,9 @@ class CVEUpdaterDownloader(object):
 
 
 d = CVEUpdaterDownloader()
-# print(d.populate())
-# print("Cache stats: {} elements".format(d.cache.stats))
-d.cache.dump_cache_into_json_file__with_ts()
+print(d.populate())
+print("Cache stats: {} elements".format(d.cache.stats))
+
+print('Dumped into: {}'.format(
+    d.cache.dump_cache_into_json_file__with_ts()
+))
