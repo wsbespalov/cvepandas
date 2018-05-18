@@ -2,6 +2,7 @@ import re
 import os
 import string
 import time
+import peewee
 import urllib
 import urllib.request as req
 import zipfile
@@ -14,6 +15,8 @@ import cpe as cpe_module
 from functools import lru_cache
 from dateutil.parser import parse as parse_datetime
 from datetime import datetime
+
+from playhouse.postgres_ext import ArrayField
 
 SETTINGS = {
     "sources": {
@@ -37,8 +40,105 @@ SETTINGS = {
         "dump_directory": "/tmp",
         "dump_file_name_base": "dump",
         "dump_file_extension": "json"
-    }
+    },
+    "postgres": {
+        "user": 'admin',
+        "password": '123',
+        "database": "updater_db",
+        "host": "localhost",
+        "port": "5432",
+        "drop_before": False,
+        "cache_size_mb": 64
+    },
 }
+
+POSTGRES = SETTINGS.get("postgres", {})
+database = peewee.PostgresqlDatabase(
+    database=POSTGRES.get("database", "updater_db"),
+    user=POSTGRES.get("user", "postgres"),
+    password=POSTGRES.get("password", "password"),
+    host=POSTGRES.get("host", "localhost"),
+    port=int(POSTGRES.get("port", 5432))
+)
+
+class vulnerabilities_inmemory(peewee.Model):
+    class Meta:
+        database = database
+        ordering = ("component", )
+        table_name = "vulnerabilities_inmemory"
+
+    id = peewee.PrimaryKeyField(null=False,)
+    component = peewee.TextField(default="",)
+    version = peewee.TextField(default="",)
+    data_type = peewee.TextField(default="",)
+    data_format = peewee.TextField(default="",)
+    data_version = peewee.TextField(default="",)
+    cwe = ArrayField(
+        peewee.TextField,
+        default=[],
+        verbose_name='cwe'
+    )
+    cve_id = peewee.TextField(default="",)
+    references = ArrayField(
+        peewee.TextField,
+        default=[],
+        verbose_name='references'
+    )
+    description = peewee.TextField(default="",)
+    cpe = peewee.TextField(default="",)
+    vulnerable_configuration = ArrayField(
+        peewee.TextField,
+        default=[],
+        verbose_name='vulnerable_configuration'
+    )
+    published = peewee.DateTimeField(default=datetime.now,)
+    modified = peewee.DateTimeField(default=datetime.now,)
+
+    access = peewee.TextField(default='{"vector": "", "complexity": "", "authentication": ""}',)
+    impact = peewee.TextField(default='{"confidentiality": "", "integrity": "", "availability": ""}',)
+
+    vector_string = peewee.TextField(default="",)
+
+    cvss_time = peewee.DateTimeField(default=datetime.now,)
+
+    cvss = peewee.FloatField(default=0.0,)
+
+    capec = ArrayField(
+        peewee.TextField,
+        default=[],
+        verbose_name='capec'
+    )
+
+    def __unicode__(self):
+        return "vulnerabilities"
+
+    def __str__(self):
+        return self.cve_id
+
+    @property
+    def to_json(self):
+        return dict(
+            id=self.id,
+            component=self.component,
+            version=self.version,
+            data_type=self.data_type,
+            data_format=self.data_format,
+            data_version=self.data_version,
+            cve_id=self.cve_id,
+            cwe=self.cwe,
+            references=self.references,
+            description=self.description,
+            cpe=self.cpe,
+            vulnerable_configuration=self.vulnerable_configuration,
+            published=self.published,
+            modified=self.modified,
+            access=self.access,
+            impact=self.impact,
+            vector_string=self.vector_string,
+            cvss_time=self.cvss_time,
+            cvss=self.cvss,
+            capec=self.capec
+        )
 
 def progressbar(it, prefix="Processing ", size=50):
     count = len(it)
@@ -371,6 +471,46 @@ class CVEUpdaterDownloader(object):
             self.cache.append_item(item)
         print('Append {} keys.'.format(self.cache.size))
 
+    def create_record_in_vulnerabilities_table(self, item_to_create):
+        capec_list = []
+        vulner = vulnerabilities_inmemory(
+            component=item_to_create.get("component", ""),
+            version=item_to_create.get("version", ""),
+            data_type=item_to_create.get("data_type", ""),
+            data_format=item_to_create.get("data_format", ""),
+            data_version=item_to_create.get("data_version", ""),
+            cve_id=item_to_create.get("cve_id", ""),
+            cwe=item_to_create.get("cwe", []),
+            references=item_to_create.get("references", []),
+            description=item_to_create.get("description", ""),
+            cpe=item_to_create.get("cpe", ""),
+            vulnerable_configuration=item_to_create.get("vulnerable_configuration", '{"data": []}'),
+            published=item_to_create.get("published", str(datetime.utcnow())),
+            modified=item_to_create.get("modified", str(datetime.utcnow())),
+            access=item_to_create.get("access", '{}'),
+            impact=item_to_create.get("impact", '{}'),
+            vector_string=item_to_create.get("vector_string", ""),
+            cvss_time=item_to_create.get("cvss_time", str(datetime.utcnow())),
+            cvss=item_to_create.get("cvss", 0.0),
+            capec=capec_list
+        )
+        vulner.save()
+        return vulner.id
+
+    def update_vulnerabilities_table_in_postgres(self):
+        database.connect()
+        vulnerabilities_inmemory.drop_table()
+        keys = self.cache.cache.keys()
+        vulnerabilities_inmemory.create_table()
+
+        for key in progressbar(keys):
+            items = self.cache.get(key)
+            for item in items:
+                _id = self.create_record_in_vulnerabilities_table(item)
+
+        database.close()
+        pass
+
     def populate(self):
         start_time = time.time()
         start_year = SETTINGS.get("start_year", 2002)
@@ -386,6 +526,7 @@ class CVEUpdaterDownloader(object):
             self.update_vulnerabilities_table_in_memory__counts(items_to_populate)
             count_of_parsed_cve_items += len(parsed_cve_items)
             count_of_populated_items += len(items_to_populate)
+        self.update_vulnerabilities_table_in_postgres()
         return count_of_parsed_cve_items, count_of_populated_items, time.time() - start_time
     pass
 
